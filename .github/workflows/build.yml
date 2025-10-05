@@ -1,0 +1,39 @@
+name: Build OpenWRT WR840N v6
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y build-essential clang flex bison g++ gawk \
+          gcc-multilib git libncurses-dev libssl-dev make python3-distutils \
+          unzip wget zlib1g-dev swig
+
+    - name: Clone OpenWRT
+      run: |
+        git clone --depth=1 https://github.com/openwrt/openwrt.git
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Inject config
+      run: |
+        cp ../.config openwrt/.config
+        cd openwrt
+        make defconfig
+
+    - name: Build firmware
+      run: |
+        cd openwrt
+        make -j$(nproc)
+
+    - name: Upload firmware
+      uses: actions/upload-artifact@v3
+      with:
+        name: firmware
+        path: openwrt/bin/targets/
