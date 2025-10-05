@@ -23,7 +23,7 @@ jobs:
 
     - name: Inject config
       run: |
-        cp ../.config openwrt/.config
+        cp .config openwrt/.config
         cd openwrt
         make defconfig
 
@@ -33,7 +33,7 @@ jobs:
         make -j$(nproc)
 
     - name: Upload firmware
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: firmware
         path: openwrt/bin/targets/
