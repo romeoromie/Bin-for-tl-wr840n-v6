@@ -23,7 +23,8 @@ jobs:
 
     - name: Inject config
       run: |
-        cp .config openwrt/.config
+        cp $GITHUB_WORKSPACE/.config openwrt/.config
+    cd openwrt
         cd openwrt
         make defconfig
 
