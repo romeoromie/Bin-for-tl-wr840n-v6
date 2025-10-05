@@ -11,7 +11,7 @@ jobs:
       run: |
         sudo apt update
         sudo apt install -y build-essential clang flex bison g++ gawk \
-          gcc-multilib git libncurses-dev libssl-dev make python3-distutils \
+          gcc-multilib git libncurses-dev libssl-dev make python3-pkg-resources \
           unzip wget zlib1g-dev swig
 
     - name: Clone OpenWRT
