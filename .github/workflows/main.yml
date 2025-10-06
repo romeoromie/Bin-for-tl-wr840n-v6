@@ -1,0 +1,100 @@
+name: OpenWrt Image Build (TL-WR840N v6.2 - 4MB Flash)
+
+# Trigger the workflow manually from the GitHub Actions tab
+on:
+  # This allows you to manually start the workflow from the Actions tab
+  workflow_dispatch:
+    inputs:
+      openwrt_version:
+        description: 'OpenWrt Release (MUST be 19.07.x for 4MB flash)'
+        required: true
+        # Default is set to 19.07.10, the last stable release for 4MB devices
+        default: '19.07.10' 
+
+# Define environment variables used throughout the build steps
+env:
+  # The correct profile name for the TL-WR840N v6 in the 19.07 series
+  TARGET_PROFILE: tplink_tl-wr840n-v6 
+  
+  # Aggressively minimal package list to fit within the 4MB flash
+  # We include nodogsplash and wpad, and explicitly remove large unnecessary packages:
+  # -opkg (no package management post-flash)
+  # -ppp/-pppoe (no broadband support)
+  # -luci (no web interface)
+  # -uhttpd/-rpcd (no web server components)
+  # -odhcp6c/-odhcpd-ipv6only (no IPv6 support, saving critical space)
+  PACKAGES: nodogsplash wpad-basic-wolfssl -opkg -ppp -pppoe -luci -luci-base -uhttpd -rpcd -odhcp6c -odhcpd-ipv6only
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout the repository content
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # 2. Download the ImageBuilder for the specified 19.07 version and target
+      - name: Download ImageBuilder
+        run: |
+          VERSION="${{ github.event.inputs.openwrt_version }}"
+          
+          # The URL structure for the ImageBuilder for ramips/mt76x8 target
+          BUILDER_URL="https://downloads.openwrt.org/releases/${VERSION}/targets/ramips/mt76x8/openwrt-imagebuilder-${VERSION}-ramips-mt76x8.Linux-x86_64.tar.xz"
+          
+          echo "Downloading ImageBuilder from: $BUILDER_URL"
+          wget $BUILDER_URL -O imagebuilder.tar.xz
+          tar -xf imagebuilder.tar.xz
+          
+          # Extract the name of the ImageBuilder directory (e.g., openwrt-imagebuilder-19.07.10-...)
+          BUILDER_DIR=$(tar -tf imagebuilder.tar.xz | head -1 | cut -f1 -d"/")
+          echo "BUILDER_DIR=$BUILDER_DIR" >> $GITHUB_ENV
+          
+      # 3. Run the ImageBuilder build process
+      - name: Build Minimal OpenWrt Image (4MB-Safe)
+        run: |
+          echo "Building image for profile: ${{ env.TARGET_PROFILE }}"
+          cd ${{ env.BUILDER_DIR }}
+          # The key command that uses the correct profile and minimal packages
+          make image PROFILE=${{ env.TARGET_PROFILE }} PACKAGES="${{ env.PACKAGES }}"
+        
+      # 4. Locate and rename the output file for a clean release name
+      - name: Prepare Files for Release
+        run: |
+          cd ${{ env.BUILDER_DIR }}/bin/targets/ramips/mt76x8
+          
+          # Locate the sysupgrade file (starts with openwrt- and ends with -sysupgrade.bin)
+          SYSUPGRADE_FILE=$(ls openwrt-*-sysupgrade.bin | head -1)
+          
+          # Create a meaningful name for the final file
+          NEW_NAME="openwrt-${{ env.TARGET_PROFILE }}-${{ github.event.inputs.openwrt_version }}-nodogsplash-sysupgrade.bin"
+          
+          mv $SYSUPGRADE_FILE $NEW_NAME
+          echo "FIRMWARE_FILE=$NEW_NAME" >> $GITHUB_ENV
+          
+      # 5. Create a GitHub Release and attach the firmware file
+      - name: Create Release and Upload Firmware
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ github.event.inputs.openwrt_version }}-hotspot
+          name: Hotspot Firmware for 4MB Flash (v${{ github.event.inputs.openwrt_version }})
+          body: |
+            # ⚠️ Built for 4MB Flash Memory (OpenWrt 19.07.10) ⚠️
+            
+            This is a critical, minimal OpenWrt build for the TP-Link TL-WR840N v6.2.
+            
+            **Included Packages:**
+            * nodogsplash (Captive Portal)
+            * wpad-basic-wolfssl (Required Wi-Fi, smallest secure option)
+            * dropbear (SSH Server)
+            * dnsmasq (DHCP/DNS)
+            
+            **Excluded Packages for Space:** LuCI, opkg, PPP, IPv6 components.
+            
+            * Target Profile: ${{ env.TARGET_PROFILE }}
+            * OpenWrt Version: ${{ github.event.inputs.openwrt_version }}
+          files: |
+            ${{ env.BUILDER_DIR }}/bin/targets/ramips/mt76x8/${{ env.FIRMWARE_FILE }}
+        env:
+          # GITHUB_TOKEN is automatically provided by GitHub Actions
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
