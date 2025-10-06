@@ -13,8 +13,8 @@ on:
 env:
   # The specific target for the TL-WR840N v6.x
   TARGET_PROFILE: tplink_tl-wr840n-v6 
-  # Minimal packages + nodogsplash, excluding LuCI and extras
-  PACKAGES: "nodogsplash wpad-basic-wolfssl -opkg -ppp -pppoe -luci -luci-base -uhttpd -rpcd -odhcp6c -odhcpd-ipv6only"
+  # FIX: Changed to a single, unquoted line to resolve YAML syntax error.
+  PACKAGES: nodogsplash wpad-basic-wolfssl -opkg -ppp -pppoe -luci -luci-base -uhttpd -rpcd -odhcp6c -odhcpd-ipv6only
 
 jobs:
   build:
@@ -38,6 +38,7 @@ jobs:
       - name: Build Minimal OpenWrt Image
         run: |
           cd ${{ env.BUILDER_DIR }}
+          # Use the environment variables in the 'make image' command
           make image PROFILE=${{ env.TARGET_PROFILE }} PACKAGES="${{ env.PACKAGES }}"
         
       # 3. Rename the output file for a clean release name
@@ -74,9 +75,3 @@ jobs:
         env:
           # This token is required for creating a release
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Upload firmware
-      uses: actions/upload-artifact@v4
-      with:
-        name: firmware
-        path: openwrt/bin/targets/
