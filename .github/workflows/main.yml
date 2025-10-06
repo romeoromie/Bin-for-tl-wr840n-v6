@@ -9,9 +9,9 @@ on:
         default: '19.07.10'
 
 env:
-  # Try the regional profile name you provided; workflow includes a fallback check
+  # prefer regional profile; workflow will show available profiles and fallback to generic if needed
   TARGET_PROFILE: tplink_tl-wr840n-v6-us
-  # Minimal package list suitable for 4MB builds on 19.07.x (use mbedtls variant on 19.07)
+  # Minimal package list suitable for 4MB builds on 19.07.x
   PACKAGES: "nodogsplash wpad-basic-mbedtls -luci -opkg -ppp -pppoe -ip6tables -odhcpd-ipv6only -kmod-ipv6 -kmod-ppp"
 
 jobs:
@@ -32,9 +32,68 @@ jobs:
           BUILDER_DIR=$(tar -tf imagebuilder.tar.xz | head -1 | cut -f1 -d"/")
           echo "BUILDER_DIR=$BUILDER_DIR" >> $GITHUB_ENV
 
-      - name: Confirm profile exists and show candidates
+      - name: Show available profiles (debug)
         run: |
           cd ${{ env.BUILDER_DIR }}
+          echo "Available profiles containing 'wr840':"
+          make info | grep -i wr840 || true
+          echo "Full profile list (first 200 lines):"
+          make info | head -n 200 || true
+
+      - name: Build Minimal OpenWrt Image (4MB-Safe)
+        run: |
+          cd ${{ env.BUILDER_DIR }}
+          echo "Attempting build for profile: ${{ env.TARGET_PROFILE }}"
+          # include repo FILES folder voucher-portal (if present) so /etc/nodogsplash is baked in
+          FILES_ARG=""
+          if [ -d "${GITHUB_WORKSPACE}/voucher-portal" ]; then
+            FILES_ARG="FILES=${GITHUB_WORKSPACE}/voucher-portal"
+            echo "Including FILES from: ${GITHUB_WORKSPACE}/voucher-portal"
+          fi
+          # try requested profile, fallback to generic
+          if make image PROFILE=${{ env.TARGET_PROFILE }} PACKAGES="${{ env.PACKAGES }}" $FILES_ARG; then
+            echo "Built using profile: ${{ env.TARGET_PROFILE }}"
+          else
+            echo "Requested profile failed, attempting generic profile fallback"
+            if make image PROFILE=generic PACKAGES="${{ env.PACKAGES }}" $FILES_ARG; then
+              echo "Built using profile: generic"
+              # record that fallback was used
+              echo "FALLBACK_USED=1" >> $GITHUB_ENV
+            else
+              echo "Build failed for both requested profile and generic" >&2
+              exit 1
+            fi
+          fi
+
+      - name: Prepare Files for Release
+        run: |
+          cd ${{ env.BUILDER_DIR }}/bin/targets/ramips/mt76x8
+          SYSUPGRADE_FILE=$(ls openwrt-*-sysupgrade.bin 2>/dev/null | head -1 || true)
+          if [ -z "$SYSUPGRADE_FILE" ]; then
+            echo "No sysupgrade file produced" >&2
+            ls -la || true
+            exit 1
+          fi
+          NEW_NAME="openwrt-${{ env.TARGET_PROFILE }}-${{ github.event.inputs.openwrt_version }}-nodogsplash-sysupgrade.bin"
+          mv "$SYSUPGRADE_FILE" "$NEW_NAME"
+          echo "FIRMWARE_FILE=$NEW_NAME" >> $GITHUB_ENV
+
+      - name: Create Release and Upload Firmware
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ github.event.inputs.openwrt_version }}-hotspot
+          name: Hotspot Firmware for 4MB Flash (v${{ github.event.inputs.openwrt_version }})
+          body: |
+            ⚠️ Built for 4MB Flash Memory (OpenWrt ${{ github.event.inputs.openwrt_version }}) ⚠️
+
+            Included Packages: nodogsplash, wpad-basic-mbedtls.
+            Excluded Packages for Space: LuCI, opkg, PPP, IPv6 components.
+
+            Target Profile: ${{ env.TARGET_PROFILE }}
+        files: |
+          ${{ env.BUILDER_DIR }}/bin/targets/ramips/mt76x8/${{ env.FIRMWARE_FILE }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}          cd ${{ env.BUILDER_DIR }}
           echo "Available profiles (grep wr840):"
           make info | grep -i wr840 || true
 
