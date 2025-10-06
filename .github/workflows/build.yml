@@ -1,19 +1,20 @@
-name: OpenWrt Image Build (TL-WR840N v6.2)
+name: OpenWrt Image Build (TL-WR840N v6.2 - 4MB Flash)
 
 # Trigger the workflow manually from the GitHub Actions tab
 on:
   workflow_dispatch:
     inputs:
       openwrt_version:
-        description: 'OpenWrt Release (e.g., 22.03.6, 23.05.0)'
+        description: 'OpenWrt Release (MUST be 19.07.x for 4MB flash)'
         required: true
-        default: '22.03.6' # Always check latest stable for ramips/mt76x8
+        # Setting default to the most stable and compatible 4MB release
+        default: '19.07.10' 
 
 # Define environment variables used in the build steps
 env:
-  # The specific target for the TL-WR840N v6.x
+  # The correct profile name for the 19.07 series
   TARGET_PROFILE: tplink_tl-wr840n-v6 
-  # FIX: Changed to a single, unquoted line to resolve YAML syntax error.
+  # Aggressive package exclusion for 4MB: no LuCI, no opkg, no IPv6, no PPP.
   PACKAGES: nodogsplash wpad-basic-wolfssl -opkg -ppp -pppoe -luci -luci-base -uhttpd -rpcd -odhcp6c -odhcpd-ipv6only
 
 jobs:
@@ -24,7 +25,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 1. Download the ImageBuilder for the specified version and target
+      # 1. Download the ImageBuilder for the 19.07.x version and ramips/mt76x8 target
       - name: Download ImageBuilder
         run: |
           VERSION="${{ github.event.inputs.openwrt_version }}"
@@ -34,6 +35,47 @@ jobs:
           BUILDER_DIR=$(tar -tf imagebuilder.tar.xz | head -1 | cut -f1 -d"/")
           echo "BUILDER_DIR=$BUILDER_DIR" >> $GITHUB_ENV
           
+      # 2. Run the ImageBuilder build process
+      - name: Build Minimal OpenWrt Image
+        run: |
+          cd ${{ env.BUILDER_DIR }}
+          # The -tplink_tl-wr840n-v6 profile in 19.07 is now valid
+          make image PROFILE=${{ env.TARGET_PROFILE }} PACKAGES="${{ env.PACKAGES }}"
+        
+      # 3. Rename the output file for a clean release name
+      - name: Prepare Files for Release
+        run: |
+          cd ${{ env.BUILDER_DIR }}/bin/targets/ramips/mt76x8
+          # Locate the sysupgrade file and rename it
+          SYSUPGRADE_FILE=$(ls *-sysupgrade.bin)
+          NEW_NAME="openwrt-${{ env.TARGET_PROFILE }}-${{ github.event.inputs.openwrt_version }}-nodogsplash-sysupgrade.bin"
+          mv $SYSUPGRADE_FILE $NEW_NAME
+          echo "FIRMWARE_FILE=$NEW_NAME" >> $GITHUB_ENV
+          
+      # 4. Upload the built firmware as an Artifact (for temporary access)
+      - name: Upload Firmware Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.FIRMWARE_FILE }}
+          path: ${{ env.BUILDER_DIR }}/bin/targets/ramips/mt76x8/${{ env.FIRMWARE_FILE }}
+
+      # 5. Create a GitHub Release and attach the firmware file
+      - name: Create Release and Upload Firmware
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ github.event.inputs.openwrt_version }}
+          name: Hotspot Firmware v${{ github.event.inputs.openwrt_version }}
+          body: |
+            ⚠️ **Built for 4MB Flash Memory** ⚠️
+            Minimal OpenWrt build for TP-Link TL-WR840N v6.2.
+            - Includes: nodogsplash, dropbear (SSH), dnsmasq (DHCP/DNS).
+            - Excludes: LuCI web interface, opkg, ppp/pppoe (critical space savings).
+            - Target Profile: ${{ env.TARGET_PROFILE }}
+            - OpenWrt Version: ${{ github.event.inputs.openwrt_version }}
+          files: |
+            ${{ env.BUILDER_DIR }}/bin/targets/ramips/mt76x8/${{ env.FIRMWARE_FILE }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # 2. Run the ImageBuilder build process
       - name: Build Minimal OpenWrt Image
         run: |
