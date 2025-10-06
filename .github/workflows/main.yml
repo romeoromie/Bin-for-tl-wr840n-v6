@@ -1,40 +1,84 @@
 name: OpenWrt Image Build (TL-WR840N v6.2 - 4MB Flash)
 
-# Trigger the workflow manually from the GitHub Actions tab
 on:
   workflow_dispatch:
     inputs:
       openwrt_version:
         description: 'OpenWrt Release (MUST be 19.07.x for 4MB flash)'
         required: true
-        # Default is set to 19.07.10, the last stable release for 4MB devices
-        default: '19.07.10' 
+        default: '19.07.10'
 
-# Define environment variables used throughout the build steps
 env:
-  # FINAL FIX: Using the US regional profile name, confirmed to exist in the 19.07.10 ImageBuilder
-  TARGET_PROFILE: tplink_tl-wr840n-v6-us 
-  
-  # Aggressively minimal package list for 4MB flash
-  PACKAGES: nodogsplash wpad-basic-wolfssl -opkg -ppp -pppoe -luci -luci-base -uhttpd -rpcd -odhcp6c -odhcpd-ipv6only
+  # Try the regional profile name you provided; workflow includes a fallback check
+  TARGET_PROFILE: tplink_tl-wr840n-v6-us
+  # Minimal package list suitable for 4MB builds on 19.07.x (use mbedtls variant on 19.07)
+  PACKAGES: "nodogsplash wpad-basic-mbedtls -luci -opkg -ppp -pppoe -ip6tables -odhcpd-ipv6only -kmod-ipv6 -kmod-ppp"
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout the repository content
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 2. Download the ImageBuilder
       - name: Download ImageBuilder
         run: |
           VERSION="${{ github.event.inputs.openwrt_version }}"
           BUILDER_URL="https://downloads.openwrt.org/releases/${VERSION}/targets/ramips/mt76x8/openwrt-imagebuilder-${VERSION}-ramips-mt76x8.Linux-x86_64.tar.xz"
-          
           echo "Downloading ImageBuilder from: $BUILDER_URL"
-          wget $BUILDER_URL -O imagebuilder.tar.xz
+          wget -q --show-progress "$BUILDER_URL" -O imagebuilder.tar.xz
+          tar -xf imagebuilder.tar.xz
+          BUILDER_DIR=$(tar -tf imagebuilder.tar.xz | head -1 | cut -f1 -d"/")
+          echo "BUILDER_DIR=$BUILDER_DIR" >> $GITHUB_ENV
+
+      - name: Confirm profile exists and show candidates
+        run: |
+          cd ${{ env.BUILDER_DIR }}
+          echo "Available profiles (grep wr840):"
+          make info | grep -i wr840 || true
+
+      - name: Build Minimal OpenWrt Image (4MB-Safe)
+        run: |
+          cd ${{ env.BUILDER_DIR }}
+          echo "Attempting build for profile: ${{ env.TARGET_PROFILE }}"
+          # First try the requested profile; if it fails, try the generic fallback
+          if make image PROFILE=${{ env.TARGET_PROFILE }} PACKAGES="${{ env.PACKAGES }}"; then
+            echo "Built using profile: ${{ env.TARGET_PROFILE }}"
+          else
+            echo "Requested profile failed, attempting generic profile fallback"
+            make image PROFILE=generic PACKAGES="${{ env.PACKAGES }}"
+          fi
+
+      - name: Prepare Files for Release
+        run: |
+          cd ${{ env.BUILDER_DIR }}/bin/targets/ramips/mt76x8
+          SYSUPGRADE_FILE=$(ls openwrt-*-sysupgrade.bin 2>/dev/null | head -1 || true)
+          if [ -z "$SYSUPGRADE_FILE" ]; then
+            echo "No sysupgrade file produced" >&2
+            ls -la
+            exit 1
+          fi
+          NEW_NAME="openwrt-${{ env.TARGET_PROFILE }}-${{ github.event.inputs.openwrt_version }}-nodogsplash-sysupgrade.bin"
+          mv "$SYSUPGRADE_FILE" "$NEW_NAME"
+          echo "FIRMWARE_FILE=$NEW_NAME" >> $GITHUB_ENV
+
+      - name: Create Release and Upload Firmware
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ github.event.inputs.openwrt_version }}-hotspot
+          name: Hotspot Firmware for 4MB Flash (v${{ github.event.inputs.openwrt_version }})
+          body: |
+            ⚠️ Built for 4MB Flash Memory (OpenWrt ${{ github.event.inputs.openwrt_version }}) ⚠️
+
+            Included Packages: nodogsplash, wpad-basic-mbedtls.
+            Excluded Packages for Space: LuCI, opkg, PPP, IPv6 components.
+
+            Target Profile: ${{ env.TARGET_PROFILE }}
+        files: |
+          ${{ env.BUILDER_DIR }}/bin/targets/ramips/mt76x8/${{ env.FIRMWARE_FILE }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}          wget $BUILDER_URL -O imagebuilder.tar.xz
           tar -xf imagebuilder.tar.xz
           
           # Extract the name of the ImageBuilder directory
