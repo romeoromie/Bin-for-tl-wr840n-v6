@@ -1,0 +1,45 @@
+name: Build OpenWRT TL-WR840N v6.2 Firmware
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      IB_VERSION: "19.07.10"
+      IB_TARGET: "ramips"
+      IB_SUBTARGET: "mt76x8"
+      IB_PROFILE: "tplink_tl-wr840n-v6-us"
+      IB_PACKAGES: "nodogsplash wpad-basic-mbedtls"
+      IB_EXCLUDE: "luci opkg ppp pppoe ip6tables odhcpd-ipv6only kmod-ipv6 kmod-ppp"
+    steps:
+      - name: Set up build environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget tar
+
+      - name: Download OpenWRT ImageBuilder
+        run: |
+          IMAGEBUILDER_URL="https://downloads.openwrt.org/releases/${IB_VERSION}/targets/${IB_TARGET}/${IB_SUBTARGET}/openwrt-imagebuilder-${IB_VERSION}-${IB_TARGET}-${IB_SUBTARGET}.Linux-x86_64.tar.xz"
+          wget -O imagebuilder.tar.xz "$IMAGEBUILDER_URL"
+          tar -xJf imagebuilder.tar.xz
+
+      - name: Build firmware image
+        working-directory: ./openwrt-imagebuilder-${{ env.IB_VERSION }}-${{ env.IB_TARGET }}-${{ env.IB_SUBTARGET }}.Linux-x86_64
+        run: |
+          make image PROFILE="${IB_PROFILE}" \
+            PACKAGES="${IB_PACKAGES} -${IB_EXCLUDE// / -}" \
+            FILES=""
+      
+      - name: Find resulting firmware
+        id: find_fw
+        run: |
+          FW_PATH=$(find bin/targets/${IB_TARGET}/${IB_SUBTARGET}/ -type f -name "*.bin" | head -n 1)
+          echo "fw_path=$FW_PATH" >> $GITHUB_OUTPUT
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-tl-wr840n-v6.2-firmware
+          path: openwrt-imagebuilder-${{ env.IB_VERSION }}-${{ env.IB_TARGET }}-${{ env.IB_SUBTARGET }}.Linux-x86_64/${{ steps.find_fw.outputs.fw_path }}
